@@ -1,0 +1,89 @@
+#!/usr/bin/env ruby
+
+# == Dependencies ===========================================================
+
+require 'optparse'
+require 'open3'
+
+# == Constants ==============================================================
+
+PATH_LENGTH_MAX = 255
+ROOT_TRIGGER = 'config.ru'.freeze
+RESTART_PATH = 'tmp/restart.txt'.freeze
+
+# == Support Methods ========================================================
+
+def rails_processes(path)
+  ps, status = Open3.capture2("ps", "aux")
+  path_rx = Regexp.new(Regexp.escape(path))
+
+  return [ ] unless (ps)
+
+  ps.split(/\n/).collect do |line|
+    parts = line.split(/\s+/)
+
+    # Ignore header. Should work with default OS X and Linux `ps` tool.
+    next if (parts[0] == 'USER')
+
+    [ parts[1].to_i, parts[10, parts.length] ]
+  end.select do |process|
+    process and process[1].grep(path_rx).any?
+  end
+end
+
+def rails_root
+  return @rails_root unless (@rails_root.nil?)
+
+  @rails_root = false
+  path = Dir.pwd
+
+  while (File.exists?(path) and (path.length < PATH_LENGTH_MAX) and !@rails_root)
+    if (File.exists?(File.expand_path(ROOT_TRIGGER, path)))
+      @rails_root = path
+    else
+      last_path = path
+      path = File.expand_path("..", path)
+
+      break if (last_path == path)
+    end
+  end
+
+  @rails_root
+end
+
+# == Main ===================================================================
+
+options = { }
+
+parser = OptionParser.new do |parser|
+  parser.on("-s", "--show", "List all Pow launched Ruby processes") do
+    options[:show] = true
+  end
+  parser.on("-k", "--kill", "Kill all Pow launched Ruby processes") do
+    options[:kill] = true
+  end
+  parser.on("-t", "--touch", "Creates a new #{RESTART_PATH} in the Rails root (default action)") do
+    options[:touch] = true
+  end
+end
+
+args = parser.parse(*ARGV)
+
+_root = rails_root
+
+unless (_root)
+  STDERR.puts("Could not find #{ROOT_TRIGGER} to locate Rails root")
+  exit(-1)
+end
+
+if (options[:show])
+  rails_processes(_root).each do |process|
+    puts '%6d %s' % [ process[0], process[1].join(' ') ]
+  end
+elsif (options[:kill])
+  rails_processes(_root).each do |process|
+    Process.kill('TERM', process[0])
+  end
+else
+  system("touch", File.expand_path(RESTART_PATH, _root))
+end
